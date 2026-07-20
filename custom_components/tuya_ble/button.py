@@ -223,6 +223,26 @@ mapping: dict[str, TuyaBLECategoryButtonMapping] = {
                     dp_type=TuyaBLEDataPointType.DT_RAW,
                 ),
             ],
+            "zyvo0vlb": [  # F302 Double PIN RFID Fingerprint Lock (Garage)
+                TuyaBLEButtonMapping(
+                    dp_id=71,  # BLE unlock check / remote unlock trigger
+                    description=ButtonEntityDescription(
+                        key="bluetooth_unlock",
+                        icon="mdi:lock-open-variant-outline",
+                    ),
+                    dp_type=TuyaBLEDataPointType.DT_RAW,
+                ),
+            ],
+            "faxrvlu8": [  # Fingerprint Double-Row Keypad RFID Handle Lock (Rumpus Room)
+                TuyaBLEButtonMapping(
+                    dp_id=71,  # BLE unlock check / remote unlock trigger
+                    description=ButtonEntityDescription(
+                        key="bluetooth_unlock",
+                        icon="mdi:lock-open-variant-outline",
+                    ),
+                    dp_type=TuyaBLEDataPointType.DT_RAW,
+                ),
+            ],
         },
     ),
     "ms": TuyaBLECategoryButtonMapping(
