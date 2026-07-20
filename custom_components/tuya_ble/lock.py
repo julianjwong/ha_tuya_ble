@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.lock import LockEntity, LockEntityDescription
+from homeassistant.components.lock import (
+    LockEntity,
+    LockEntityFeature,
+    LockEntityDescription,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -11,10 +15,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DPCode
 from .devices import (
-    TuyaBLECoordinator,
     TuyaBLEData,
     TuyaBLEEntity,
     TuyaBLEProductInfo,
+    TuyaBLECoordinator,
     get_device_product_info,
 )
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
@@ -25,7 +29,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Tuya BLE lock."""
+    """Set up the Tuya BLE locks."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     product = get_device_product_info(data.device)
     if product and product.lock:
@@ -51,6 +55,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             product,
             LockEntityDescription(key="lock", name=product.name),
         )
+        self._attr_supported_features = LockEntityFeature.OPEN
 
     @property
     def is_locked(self) -> bool | None:
@@ -74,7 +79,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             return
 
         manual_lock = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, False
+            dp_id, TuyaBLEDataPointType.DT_BOOL, True
         )
         if manual_lock is not None:
             await manual_lock.set_value(True)
@@ -89,4 +94,16 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             dp_id, TuyaBLEDataPointType.DT_BOOL, False
         )
         if manual_lock is not None:
-            await manual_lock.set_value(True)
+            await manual_lock.set_value(False)
+
+    async def async_open(self, **kwargs: Any) -> None:
+        """Open the lock."""
+        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dp_id is None:
+            return
+
+        manual_lock = self._device.datapoints.get_or_create(
+            dp_id, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if manual_lock is not None:
+            await manual_lock.set_value(False)
