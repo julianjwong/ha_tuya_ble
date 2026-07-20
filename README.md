@@ -1,31 +1,37 @@
-# Home Assistant support for Tuya BLE devices
+# Home Assistant support for Tuya BLE devices (Julian's Fork)
 
 ## Overview
 
-This integration is an almalgamation of a number of community maintained forks. It should be considered **unstable** quality at this time.
+This integration is an amalgamation of a number of community maintained forks. It should be considered **unstable** quality at this time.
 
-See full list of forks:
-https://github.com/ha-tuya-ble/ha_tuya_ble/issues/1
+This fork adds support for the **F302 Double PIN RFID Fingerprint Lock** and the **Fingerprint Double-Row Keypad RFID Handle Lock**, verified against real hardware (Garage and Rumpus Room locks) using DP data pulled directly from the Tuya IoT dev portal.
 
+See full list of upstream forks:
+[https://github.com/ha-tuya-ble/ha_tuya_ble/issues/1](https://github.com/ha-tuya-ble/ha_tuya_ble/issues/1)
 
-_Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot) & forked from https://github.com/PlusPlus-ua/ha_tuya_ble_ 
+_Inspired by code of [@redphx](https://github.com/redphx/poc-tuya-ble-fingerbot) & forked from [https://github.com/ha-tuya-ble/ha_tuya_ble](https://github.com/ha-tuya-ble/ha_tuya_ble)_
 
-_Original HASS component forked from https://github.com/PlusPlus-ua/ha_tuya_ble_
+_Original HASS component forked from [https://github.com/PlusPlus-ua/ha_tuya_ble](https://github.com/PlusPlus-ua/ha_tuya_ble)_
 
-_This forks base is from https://github.com/markusg1234/ha_tuya_ble_
-
+_That fork's base is from [https://github.com/markusg1234/ha_tuya_ble](https://github.com/markusg1234/ha_tuya_ble)_
 
 ## Installation
 
 Place the `custom_components` folder in your configuration directory (or add its contents to an existing `custom_components` folder). Alternatively install via [HACS](https://hacs.xyz/).
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=ha-tuya-ble&repository=ha_tuya_ble&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=julianjwong&repository=ha_tuya_ble&category=integration)
+
+Or add it manually as a custom repository in HACS using:
+
+```
+https://github.com/julianjwong/ha_tuya_ble
+```
 
 ## Usage
 
-After adding to Home Assistant integration should discover all supported Bluetooth devices, or you can add discoverable devices manually.
+After adding to Home Assistant the integration should discover all supported Bluetooth devices, or you can add discoverable devices manually.
 
-The integration works locally, but connection to Tuya BLE device requires device ID and encryption key from Tuya IOT cloud. It could be obtained using the same credentials as in the previous official Tuya integration. To obtain the credentials, please refer to official Tuya integration [documentation](https://web.archive.org/web/20231228044831/https://www.home-assistant.io/integrations/tuya/) [[1]](https://github.com/home-assistant/home-assistant.io/blob/a4e6d4819f1db584cc66ba2082508d3978f83f7e/source/_integrations/tuya.markdown)
+The integration works locally, but connection to a Tuya BLE device requires the device ID and encryption key from the Tuya IoT cloud. These can be obtained using the same credentials as the previous official Tuya integration. To obtain the credentials, please refer to the official Tuya integration [documentation](https://web.archive.org/web/20231228044831/https://www.home-assistant.io/integrations/tuya/) [[1]](https://github.com/home-assistant/home-assistant.io/blob/a4e6d4819f1db584cc66ba2082508d3978f83f7e/source/_integrations/tuya.markdown)
 
 ## Supported devices list
 
@@ -117,8 +123,8 @@ The integration works locally, but connection to Tuya BLE device requires device
       <td>—</td>
     </tr>
     <tr>
-      <td rowspan="19"><strong>Smart Locks</strong></td>
-      <td rowspan="19"><code>ms</code>, <code>jtmspro</code></td>
+      <td rowspan="21"><strong>Smart Locks</strong></td>
+      <td rowspan="21"><code>ms</code>, <code>jtmspro</code></td>
       <td>Smart Lock</td>
       <td><code>ludzroix</code>, <code>isk2p555</code>, <code>gumrixyt</code>, <code>uamrw6h3</code>, <code>sidhzylo</code>, <code>mqc2hevy</code>, <code>7a4xvbtt</code></td>
       <td>—</td>
@@ -212,6 +218,16 @@ The integration works locally, but connection to Tuya BLE device requires device
       <td>Gainsborough Liberty BLE Lock (GGC01HA)</td>
       <td><code>yfqp0shy</code></td>
       <td>—</td>
+    </tr>
+    <tr>
+      <td>F302 Double PIN RFID Fingerprint Lock</td>
+      <td><code>zyvo0vlb</code></td>
+      <td>Added in this fork. Supports fingerprint, PIN, RFID card, and BLE unlock; battery state and alarm event sensors.</td>
+    </tr>
+    <tr>
+      <td>Fingerprint Double-Row Keypad RFID Handle Lock</td>
+      <td><code>faxrvlu8</code></td>
+      <td>Added in this fork. Supports fingerprint, PIN, RFID card, temporary password, and BLE unlock; auto-lock timer and door status sensors.</td>
     </tr>
     <tr>
       <td><strong>Climate</strong></td>
@@ -355,6 +371,9 @@ For programming exposed entities: 'Program' (switch), 'Repeat forever', 'Repeats
 
 ### Lights Compatibility Note
 Note that some light products are using Bluetooth Mesh protocols and not BLE and so aren't compatible with this integration. That's probably the case if your product isn't at least found (even if non-working) by this integration.
+
+### Smart Locks Note (this fork)
+The **F302 Double PIN RFID Fingerprint Lock** (`zyvo0vlb`) and **Fingerprint Double-Row Keypad RFID Handle Lock** (`faxrvlu8`) were added and validated against real hardware using DP dumps from the Tuya IoT dev portal. Both expose `manual_lock` / `lock_motor_state` for lock/unlock and lock state, plus additional sensors, switches, and a `bluetooth_unlock` button (dp 71) — see `devices.py`, `sensor.py`, `binary_sensor.py`, `switch.py`, and `button.py` for the full mapping.
 
 ## Note that the original hasn't been updated in a long time, still, Support original developer @PlusPlus-ua:
 
