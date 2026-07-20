@@ -3,10 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.lock import (
-    LockEntity,
-    LockEntityDescription,
-)
+from homeassistant.components.lock import LockEntity, LockEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -14,10 +11,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DPCode
 from .devices import (
+    TuyaBLECoordinator,
     TuyaBLEData,
     TuyaBLEEntity,
     TuyaBLEProductInfo,
-    TuyaBLECoordinator,
     get_device_product_info,
 )
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
@@ -28,7 +25,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Tuya BLE lock entity."""
+    """Set up the Tuya BLE lock."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     product = get_device_product_info(data.device)
     if product and product.lock:
@@ -92,4 +89,4 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             dp_id, TuyaBLEDataPointType.DT_BOOL, False
         )
         if manual_lock is not None:
-            await manual_lock.set_value(False)
+            await manual_lock.set_value(True)
