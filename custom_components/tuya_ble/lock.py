@@ -57,6 +57,17 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         )
         self._attr_supported_features = LockEntityFeature.OPEN
 
+    async def _run_zyvo0vlb_unlock(self) -> None:
+        """Run the validated dp71 unlock flow for zyvo0vlb."""
+        dp71_value = bytes.fromhex("a4a4a4a43439333236323630016a4784cf000000")
+        dp71 = self._device.datapoints.get_or_create(
+            71,
+            TuyaBLEDataPointType.DT_RAW,
+            b"",
+        )
+        if dp71:
+            await dp71.set_value(dp71_value)
+
     @property
     def is_locked(self) -> bool | None:
         """Return true if lock is locked."""
@@ -86,6 +97,10 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
+        if self._device.product_id == "zyvo0vlb":
+            await self._run_zyvo0vlb_unlock()
+            return
+
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
         if dp_id is None:
             return
@@ -98,6 +113,10 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the lock."""
+        if self._device.product_id == "zyvo0vlb":
+            await self._run_zyvo0vlb_unlock()
+            return
+
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
         if dp_id is None:
             return
