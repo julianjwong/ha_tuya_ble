@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 import logging
 from typing import Callable
 
@@ -19,17 +18,12 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-from .const import (
-    DOMAIN,
-)
+from .const import DOMAIN
 from .devices import TuyaBLEData, TuyaBLEEntity, TuyaBLEProductInfo
 from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
-
 SIGNAL_STRENGTH_DP_ID = -1
-
-
 TuyaBLEBinarySensorIsAvailable = (
     Callable[["TuyaBLEBinarySensor", TuyaBLEProductInfo], bool] | None
 )
@@ -42,7 +36,7 @@ def _bitmap_value_to_int(value: bytes | bytearray | int) -> int:
     return int(value)
 
 
-def door_status_getter(self: TuyaBLEBinarySensor) -> None:
+def door_status_getter(self: "TuyaBLEBinarySensor") -> None:
     datapoint = self._device.datapoints[self._mapping.dp_id]
     if datapoint and datapoint.value is not None:
         if datapoint.value == "open":
@@ -61,10 +55,8 @@ class TuyaBLEBinarySensorMapping:
     description: BinarySensorEntityDescription
     force_add: bool = True
     dp_type: TuyaBLEDataPointType | None = None
-    getter: Callable[[TuyaBLEBinarySensor], None] | None = None
+    getter: Callable[["TuyaBLEBinarySensor"], None] | None = None
     bit: int | None = None
-    # coefficient: float = 1.0
-    # icons: list[str] | None = None
     is_available: TuyaBLEBinarySensorIsAvailable = None
 
 
@@ -77,228 +69,9 @@ class TuyaBLECategoryBinarySensorMapping:
 
 
 mapping: dict[str, TuyaBLECategoryBinarySensorMapping] = {
-    "dcb": TuyaBLECategoryBinarySensorMapping(
-        products={
-            **dict.fromkeys(
-                [
-                    "ajrhf1aj",
-                    "z5ztlw3k",
-                ],  # PARKSIDE Smart battery
-                [
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=171,
-                        description=BinarySensorEntityDescription(
-                            key="cw_or_ccw_display",
-                            icon="mdi:rotate-3d-variant",
-                        ),
-                    ),
-                ],
-            ),
-        },
-    ),
-    "wk": TuyaBLECategoryBinarySensorMapping(
-        products={
-            **dict.fromkeys(
-                [
-                    "drlajpqc",
-                    "nhj2j7su",
-                    "zmachryv",
-                ],
-                [  # Thermostatic Radiator Valve
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=105,
-                        description=BinarySensorEntityDescription(
-                            key="battery",
-                            # icon="mdi:battery-alert",
-                            device_class=BinarySensorDeviceClass.BATTERY,
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                    )
-                ],
-            ),
-        },
-    ),
-    "ms": TuyaBLECategoryBinarySensorMapping(
-        products={
-            # TODO: Review how many of these are better off as a switch only?
-            **dict.fromkeys(
-                [
-                    "okkyfgfs",
-                    "sidhzylo",
-                    "mqc2hevy",
-                    "6fibxtph",
-                    "99gv5nmz",
-                ],  # Smart Lock
-                [
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=47,
-                        description=BinarySensorEntityDescription(
-                            key="lock_motor_state",
-                        ),
-                    ),
-                ],
-            ),
-        }
-    ),
-    "sfkzq": TuyaBLECategoryBinarySensorMapping(
-        products={
-            "ldcdnigc": [
-                TuyaBLEBinarySensorMapping(
-                    dp_id=1,
-                    dp_type=TuyaBLEDataPointType.DT_BOOL,
-                    description=BinarySensorEntityDescription(
-                        key="switch",
-                        name="Switch status",
-                        device_class=BinarySensorDeviceClass.OPENING,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=0,
-                    description=BinarySensorEntityDescription(
-                        key="low_battery",
-                        name="Low Battery",
-                        device_class=BinarySensorDeviceClass.BATTERY,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=1,
-                    description=BinarySensorEntityDescription(
-                        key="fault",
-                        name="Fault",
-                        device_class=BinarySensorDeviceClass.PROBLEM,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=2,
-                    description=BinarySensorEntityDescription(
-                        key="lack_water",
-                        name="Lack of Water",
-                        device_class=BinarySensorDeviceClass.PROBLEM,
-                        icon="mdi:water-off",
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=3,
-                    description=BinarySensorEntityDescription(
-                        key="sensor_fault",
-                        name="Sensor Fault",
-                        device_class=BinarySensorDeviceClass.PROBLEM,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=4,
-                    description=BinarySensorEntityDescription(
-                        key="motor_fault",
-                        name="Motor Fault",
-                        device_class=BinarySensorDeviceClass.PROBLEM,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=4,
-                    dp_type=TuyaBLEDataPointType.DT_BITMAP,
-                    bit=5,
-                    description=BinarySensorEntityDescription(
-                        key="low_temp",
-                        name="Low Temperature",
-                        device_class=BinarySensorDeviceClass.COLD,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-            ],
-        },
-    ),
     "jtmspro": TuyaBLECategoryBinarySensorMapping(
         products={
-            **dict.fromkeys(
-                [
-                    "stugc8dl",
-                    "xicdxood",
-                ],
-                [
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=22,
-                        description=BinarySensorEntityDescription(
-                            key="duress",
-                            device_class=BinarySensorDeviceClass.SAFETY,
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                    ),
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=40,
-                        description=BinarySensorEntityDescription(
-                            key="door_status",
-                            device_class=BinarySensorDeviceClass.DOOR,
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                        getter=door_status_getter,
-                    ),
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=102,
-                        description=BinarySensorEntityDescription(
-                            key="keypad_reset",
-                            device_class=BinarySensorDeviceClass.RUNNING,
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                    ),
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=107,
-                        description=BinarySensorEntityDescription(
-                            key="connectivity",
-                            device_class=BinarySensorDeviceClass.CONNECTIVITY,
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                    ),
-                ],
-            ),
-            **dict.fromkeys(
-                [
-                    "hs21i377",
-                    "kholoaew",
-                ],
-                [
-                    TuyaBLEBinarySensorMapping(
-                        dp_id=47,
-                        description=BinarySensorEntityDescription(
-                            key="lock_motor_state",
-                            entity_category=EntityCategory.DIAGNOSTIC,
-                        ),
-                    ),
-                ],
-            ),
-            "yfqp0shy": [
-                TuyaBLEBinarySensorMapping(
-                    dp_id=47,
-                    description=BinarySensorEntityDescription(
-                        key="lock_motor_state",
-                        device_class=BinarySensorDeviceClass.LOCK,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=22,
-                    description=BinarySensorEntityDescription(
-                        key="hijack",
-                        device_class=BinarySensorDeviceClass.TAMPER,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-            ],
-            "zyvo0vlb": [  # F302 Double PIN RFID Fingerprint Lock (Garage)
+            "zyvo0vlb": [
                 TuyaBLEBinarySensorMapping(
                     dp_id=47,
                     description=BinarySensorEntityDescription(
@@ -313,58 +86,12 @@ mapping: dict[str, TuyaBLECategoryBinarySensorMapping] = {
                         key="doorbell",
                         device_class=BinarySensorDeviceClass.OCCUPANCY,
                         entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-            ],
-            "faxrvlu8": [  # Fingerprint Double-Row Keypad RFID Handle Lock (Rumpus Room)
-                TuyaBLEBinarySensorMapping(
-                    dp_id=47,
-                    description=BinarySensorEntityDescription(
-                        key="lock_motor_state",
-                        device_class=BinarySensorDeviceClass.LOCK,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=22,
-                    description=BinarySensorEntityDescription(
-                        key="hijack",
-                        device_class=BinarySensorDeviceClass.TAMPER,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=18,
-                    description=BinarySensorEntityDescription(
-                        key="open_inside",
-                        device_class=BinarySensorDeviceClass.DOOR,
-                        entity_category=EntityCategory.DIAGNOSTIC,
-                    ),
-                ),
-                TuyaBLEBinarySensorMapping(
-                    dp_id=24,
-                    description=BinarySensorEntityDescription(
-                        key="doorbell",
-                        device_class=BinarySensorDeviceClass.OCCUPANCY,
-                        entity_category=EntityCategory.DIAGNOSTIC,
+                        entity_registry_enabled_default=False,
                     ),
                 ),
             ],
         },
     ),
-    # "jtmspro": TuyaBLECategoryBinarySensorMapping(
-    #     products={
-    #         "ajk32biq": [
-    #             TuyaBLEBinarySensorMapping(
-    #                 dp_id=24,
-    #                 description=BinarySensorEntityDescription(
-    #                     key="doorbell",
-    #                     device_class=BinarySensorDeviceClass.DOORBELL,
-    #                 ),
-    #             ),
-    #         ],
-    #     }
-    # ),
 }
 
 
@@ -374,9 +101,8 @@ def get_mapping_by_device(device: TuyaBLEDevice) -> list[TuyaBLEBinarySensorMapp
         product_mapping = category.products.get(device.product_id)
         if product_mapping is not None:
             return product_mapping
-        if category.mapping is not None:
-            return category.mapping
-
+    if category is not None and category.mapping is not None:
+        return category.mapping
     return []
 
 
@@ -398,7 +124,6 @@ class TuyaBLEBinarySensor(TuyaBLEEntity, BinarySensorEntity):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Handle updated data from the coordinator."""
         if self._mapping.getter is not None:
             self._mapping.getter(self)
         else:
@@ -409,34 +134,10 @@ class TuyaBLEBinarySensor(TuyaBLEEntity, BinarySensorEntity):
                     self._attr_is_on = bool((value >> self._mapping.bit) & 1)
                 else:
                     self._attr_is_on = bool(datapoint.value)
-                """
-                if datapoint.type == TuyaBLEDataPointType.DT_ENUM:
-                    if self.entity_description.options is not None:
-                        if datapoint.value >= 0 and datapoint.value < len(
-                            self.entity_description.options
-                        ):
-                            self._attr_native_value = self.entity_description.options[
-                                datapoint.value
-                            ]
-                        else:
-                            self._attr_native_value = datapoint.value
-                    if self._mapping.icons is not None:
-                        if datapoint.value >= 0 and datapoint.value < len(
-                            self._mapping.icons
-                        ):
-                            self._attr_icon = self._mapping.icons[datapoint.value]
-                elif datapoint.type == TuyaBLEDataPointType.DT_VALUE:
-                    self._attr_native_value = (
-                        datapoint.value / self._mapping.coefficient
-                    )
-                else:
-                    self._attr_native_value = datapoint.value
-                """
         self.async_write_ha_state()
 
     @property
     def available(self) -> bool:
-        """Return if entity is available."""
         result = super().available
         if result and self._mapping.is_available:
             result = self._mapping.is_available(self, self._product)
@@ -453,9 +154,7 @@ async def async_setup_entry(
     mappings = get_mapping_by_device(data.device)
     entities: list[TuyaBLEBinarySensor] = []
     for mapping in mappings:
-        if mapping.force_add or data.device.datapoints.has_id(
-            mapping.dp_id, mapping.dp_type
-        ):
+        if mapping.force_add or data.device.datapoints.has_id(mapping.dp_id, mapping.dp_type):
             entities.append(
                 TuyaBLEBinarySensor(
                     hass,
