@@ -10,7 +10,7 @@ from homeassistant.components.lock import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, DPCode
@@ -21,7 +21,7 @@ from .devices import (
     TuyaBLECoordinator,
     get_device_product_info,
 )
-from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
+from .tuya_ble import TuyaBLEDataPoint, TuyaBLEDataPointType, TuyaBLEDevice
 
 
 async def async_setup_entry(
@@ -56,6 +56,8 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             LockEntityDescription(key="lock", name=product.name),
         )
         self._attr_supported_features = LockEntityFeature.OPEN
+        self._optimistic_is_locked: bool | None = None
+        self._pending_lock_command = False
 
     async def _run_zyvo0vlb_unlock(self) -> None:
         """Run the validated dp71 unlock flow for zyvo0vlb."""
@@ -68,9 +70,8 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         if dp71:
             await dp71.set_value(dp71_value)
 
-    @property
-    def is_locked(self) -> bool | None:
-        """Return true if lock is locked."""
+    def _motor_state_locked(self) -> bool | None:
+        """Read raw lock state from motor-state datapoint."""
         dp_id = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
         if dp_id is None:
             return None
@@ -83,6 +84,13 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
         return not bool(motor_state.value)
 
+    @property
+    def is_locked(self) -> bool | None:
+        """Return true if lock is locked."""
+        if self._device.product_id == "zyvo0vlb" and self._optimistic_is_locked is not None:
+            return self._optimistic_is_locked
+        return self._motor_state_locked()
+
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
@@ -93,11 +101,16 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             dp_id, TuyaBLEDataPointType.DT_BOOL, True
         )
         if manual_lock is not None:
+            if self._device.product_id == "zyvo0vlb":
+                self._pending_lock_command = True
             await manual_lock.set_value(True)
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
         if self._device.product_id == "zyvo0vlb":
+            self._optimistic_is_locked = False
+            self._pending_lock_command = False
+            self.async_write_ha_state()
             await self._run_zyvo0vlb_unlock()
             return
 
@@ -114,6 +127,9 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
     async def async_open(self, **kwargs: Any) -> None:
         """Open the lock."""
         if self._device.product_id == "zyvo0vlb":
+            self._optimistic_is_locked = False
+            self._pending_lock_command = False
+            self.async_write_ha_state()
             await self._run_zyvo0vlb_unlock()
             return
 
@@ -126,3 +142,23 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         )
         if manual_lock is not None:
             await manual_lock.set_value(False)
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Handle updated data from the coordinator."""
+        if self._device.product_id == "zyvo0vlb":
+            updates: list[TuyaBLEDataPoint] | None = self._coordinator.last_updates
+            motor_dp_id = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
+            if updates and motor_dp_id is not None:
+                for update in updates:
+                    if update.id == motor_dp_id:
+                        locked = self._motor_state_locked()
+                        if locked is True:
+                            self._optimistic_is_locked = True
+                            self._pending_lock_command = False
+                        elif self._pending_lock_command:
+                            self._optimistic_is_locked = False
+            self.async_write_ha_state()
+            return
+
+        super()._handle_coordinator_update()
