@@ -5,7 +5,6 @@ from typing import Any
 
 from homeassistant.components.lock import (
     LockEntity,
-    LockEntityFeature,
     LockEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -29,16 +28,16 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Tuya BLE sensors."""
+    """Set up the Tuya BLE lock entity."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     product = get_device_product_info(data.device)
     if product and product.lock:
-        async_add_entities(
-            [TuyaBLELock(hass, data.coordinator, data.device, product)]
-        )
+        async_add_entities([TuyaBLELock(hass, data.coordinator, data.device, product)])
 
 
 class TuyaBLELock(TuyaBLEEntity, LockEntity):
+    """Representation of a Tuya BLE lock."""
+
     platform = Platform.LOCK
 
     def __init__(
@@ -55,46 +54,42 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             product,
             LockEntityDescription(key="lock", name=product.name),
         )
-        self._attr_supported_features = LockEntityFeature.OPEN
 
     @property
     def is_locked(self) -> bool | None:
         """Return true if lock is locked."""
         dp_id = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
-        if dp_id is not None:
-            motor_state = self.device.datapoints.get_or_create(
-                dp_id, TuyaBLEDataPointType.DT_BOOL, False
-            )
-            if motor_state:
-                return not motor_state.value
-        return None
+        if dp_id is None:
+            return None
+
+        motor_state = self._device.datapoints.get_or_create(
+            dp_id, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if motor_state is None:
+            return None
+
+        return not bool(motor_state.value)
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is not None:
-            manual_lock = self.device.datapoints.get_or_create(
-                dp_id, TuyaBLEDataPointType.DT_BOOL, True
-            )
-            if manual_lock:
-                await manual_lock.set_value(True)
+        if dp_id is None:
+            return
+
+        manual_lock = self._device.datapoints.get_or_create(
+            dp_id, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if manual_lock is not None:
+            await manual_lock.set_value(True)
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is not None:
-            manual_lock = self.device.datapoints.get_or_create(
-                dp_id, TuyaBLEDataPointType.DT_BOOL, False
-            )
-            if manual_lock:
-                await manual_lock.set_value(False)
+        if dp_id is None:
+            return
 
-    async def async_open(self, **kwargs: Any) -> None:
-        """Open the covering."""
-        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is not None:
-            manual_lock = self.device.datapoints.get_or_create(
-                dp_id, TuyaBLEDataPointType.DT_BOOL, False
-            )
-            if manual_lock:
-                await manual_lock.set_value(False)
+        manual_lock = self._device.datapoints.get_or_create(
+            dp_id, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if manual_lock is not None:
+            await manual_lock.set_value(False)
