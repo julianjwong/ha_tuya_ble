@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN, DPCode
 from .devices import (
@@ -22,6 +23,9 @@ from .devices import (
     get_device_product_info,
 )
 from .tuya_ble import TuyaBLEDataPoint, TuyaBLEDataPointType, TuyaBLEDevice
+
+
+COMMAND_TIMEOUT = 4.0
 
 
 async def async_setup_entry(
@@ -57,7 +61,10 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         )
         self._attr_supported_features = LockEntityFeature.OPEN
         self._optimistic_is_locked: bool | None = None
+        self._command_in_progress = False
+        self._pending_target_locked: bool | None = None
         self._pending_lock_command = False
+        self._clear_command_handle = None
 
     async def _run_zyvo0vlb_unlock(self) -> None:
         """Run the validated dp71 unlock flow for zyvo0vlb."""
@@ -84,6 +91,29 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
         return not bool(motor_state.value)
 
+    def _clear_pending_command(self) -> None:
+        self._command_in_progress = False
+        self._pending_target_locked = None
+        self._pending_lock_command = False
+        if self._clear_command_handle is not None:
+            self._clear_command_handle()
+            self._clear_command_handle = None
+
+    def _arm_command_timeout(self) -> None:
+        if self._clear_command_handle is not None:
+            self._clear_command_handle()
+        self._clear_command_handle = async_call_later(
+            self._hass, COMMAND_TIMEOUT, self._handle_command_timeout
+        )
+
+    @callback
+    def _handle_command_timeout(self, _now) -> None:
+        self._command_in_progress = False
+        self._pending_target_locked = None
+        self._pending_lock_command = False
+        self._clear_command_handle = None
+        self.async_write_ha_state()
+
     @property
     def is_locked(self) -> bool | None:
         """Return true if lock is locked."""
@@ -93,23 +123,48 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
+        if self._device.product_id == "zyvo0vlb":
+            if self._command_in_progress and self._pending_target_locked is True:
+                return
+            if self._command_in_progress and self._pending_target_locked is False:
+                return
+            dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
+            if dp_id is None:
+                return
+            manual_lock = self._device.datapoints.get_or_create(
+                dp_id, TuyaBLEDataPointType.DT_BOOL, True
+            )
+            if manual_lock is not None:
+                self._command_in_progress = True
+                self._pending_target_locked = True
+                self._pending_lock_command = True
+                self._optimistic_is_locked = False
+                self._arm_command_timeout()
+                self.async_write_ha_state()
+                await manual_lock.set_value(True)
+            return
+
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
         if dp_id is None:
             return
-
         manual_lock = self._device.datapoints.get_or_create(
             dp_id, TuyaBLEDataPointType.DT_BOOL, True
         )
         if manual_lock is not None:
-            if self._device.product_id == "zyvo0vlb":
-                self._pending_lock_command = True
             await manual_lock.set_value(True)
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
         if self._device.product_id == "zyvo0vlb":
-            self._optimistic_is_locked = False
+            if self._command_in_progress and self._pending_target_locked is False:
+                return
+            if self._command_in_progress and self._pending_target_locked is True:
+                return
+            self._command_in_progress = True
+            self._pending_target_locked = False
             self._pending_lock_command = False
+            self._optimistic_is_locked = False
+            self._arm_command_timeout()
             self.async_write_ha_state()
             await self._run_zyvo0vlb_unlock()
             return
@@ -117,7 +172,6 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
         if dp_id is None:
             return
-
         manual_lock = self._device.datapoints.get_or_create(
             dp_id, TuyaBLEDataPointType.DT_BOOL, False
         )
@@ -126,22 +180,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the lock."""
-        if self._device.product_id == "zyvo0vlb":
-            self._optimistic_is_locked = False
-            self._pending_lock_command = False
-            self.async_write_ha_state()
-            await self._run_zyvo0vlb_unlock()
-            return
-
-        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is None:
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if manual_lock is not None:
-            await manual_lock.set_value(False)
+        await self.async_unlock(**kwargs)
 
     @callback
     def _handle_coordinator_update(self) -> None:
@@ -155,9 +194,12 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
                         locked = self._motor_state_locked()
                         if locked is True:
                             self._optimistic_is_locked = True
-                            self._pending_lock_command = False
+                            self._clear_pending_command()
                         elif self._pending_lock_command:
                             self._optimistic_is_locked = False
+                            self._command_in_progress = False
+                            self._pending_target_locked = None
+                            self._pending_lock_command = False
             self.async_write_ha_state()
             return
 
