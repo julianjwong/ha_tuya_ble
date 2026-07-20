@@ -438,6 +438,12 @@ devices_database: dict[str, TuyaBLECategoryInfo] = {
             "yfqp0shy": TuyaBLEProductInfo(
                 name="Gainsborough Liberty BLE Lock (GGC01HA)", lock=1
             ),
+            "zyvo0vlb": TuyaBLEProductInfo(
+                name="F302 Double PIN RFID Fingerprint Lock", lock=1
+            ),
+            "faxrvlu8": TuyaBLEProductInfo(
+                name="Fingerprint Double-Row Keypad RFID Handle Lock", lock=1
+            ),
         },
     ),
     "szjqr": TuyaBLECategoryInfo(
