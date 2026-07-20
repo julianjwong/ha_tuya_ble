@@ -298,6 +298,58 @@ mapping: dict[str, TuyaBLECategoryBinarySensorMapping] = {
                     ),
                 ),
             ],
+            "zyvo0vlb": [  # F302 Double PIN RFID Fingerprint Lock (Garage)
+                TuyaBLEBinarySensorMapping(
+                    dp_id=47,
+                    description=BinarySensorEntityDescription(
+                        key="lock_motor_state",
+                        device_class=BinarySensorDeviceClass.LOCK,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+                TuyaBLEBinarySensorMapping(
+                    dp_id=24,
+                    description=BinarySensorEntityDescription(
+                        key="doorbell",
+                        device_class=BinarySensorDeviceClass.OCCUPANCY,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+            ],
+            "faxrvlu8": [  # Fingerprint Double-Row Keypad RFID Handle Lock (Rumpus Room)
+                TuyaBLEBinarySensorMapping(
+                    dp_id=47,
+                    description=BinarySensorEntityDescription(
+                        key="lock_motor_state",
+                        device_class=BinarySensorDeviceClass.LOCK,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+                TuyaBLEBinarySensorMapping(
+                    dp_id=22,
+                    description=BinarySensorEntityDescription(
+                        key="hijack",
+                        device_class=BinarySensorDeviceClass.TAMPER,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+                TuyaBLEBinarySensorMapping(
+                    dp_id=18,
+                    description=BinarySensorEntityDescription(
+                        key="open_inside",
+                        device_class=BinarySensorDeviceClass.DOOR,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+                TuyaBLEBinarySensorMapping(
+                    dp_id=24,
+                    description=BinarySensorEntityDescription(
+                        key="doorbell",
+                        device_class=BinarySensorDeviceClass.OCCUPANCY,
+                        entity_category=EntityCategory.DIAGNOSTIC,
+                    ),
+                ),
+            ],
         },
     ),
     # "jtmspro": TuyaBLECategoryBinarySensorMapping(
