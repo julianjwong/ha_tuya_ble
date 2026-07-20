@@ -465,6 +465,66 @@ mapping: dict[str, TuyaBLECategorySwitchMapping] = {
                     ),
                 ),
             ],
+            "zyvo0vlb": [  # F302 Double PIN RFID Fingerprint Lock (Garage)
+                TuyaLockMotorStateMapping(dp_id=47),
+                TuyaBLESwitchMapping(
+                    dp_id=46,
+                    description=SwitchEntityDescription(
+                        key="manual_lock",
+                        icon="mdi:lock-plus",
+                    ),
+                ),
+                TuyaBLESwitchMapping(
+                    dp_id=33,
+                    description=SwitchEntityDescription(
+                        key="automatic_lock",
+                        icon="mdi:lock-clock",
+                        entity_category=EntityCategory.CONFIG,
+                    ),
+                ),
+                TuyaBLESwitchMapping(
+                    dp_id=32,
+                    description=SwitchEntityDescription(
+                        key="reverse_lock",
+                        icon="mdi:lock-alert-outline",
+                        entity_category=EntityCategory.CONFIG,
+                    ),
+                ),
+                TuyaBLESwitchMapping(
+                    dp_id=79,
+                    description=SwitchEntityDescription(
+                        key="e_anti_lock",
+                        icon="mdi:lock-check-outline",
+                        entity_category=EntityCategory.CONFIG,
+                    ),
+                ),
+            ],
+            "faxrvlu8": [  # Fingerprint Double-Row Keypad RFID Handle Lock (Rumpus Room)
+                TuyaLockMotorStateMapping(dp_id=47),
+                TuyaBLESwitchMapping(
+                    dp_id=46,
+                    description=SwitchEntityDescription(
+                        key="manual_lock",
+                        icon="mdi:lock-plus",
+                    ),
+                ),
+                TuyaBLESwitchMapping(
+                    dp_id=33,
+                    description=SwitchEntityDescription(
+                        key="automatic_lock",
+                        icon="mdi:lock-clock",
+                        entity_category=EntityCategory.CONFIG,
+                    ),
+                ),
+                TuyaBLESwitchMapping(
+                    dp_id=79,
+                    description=SwitchEntityDescription(
+                        key="e_anti_lock",
+                        icon="mdi:lock-check-outline",
+                        entity_category=EntityCategory.CONFIG,
+                    ),
+                ),
+            ],
         }
     ),
     "kg": TuyaBLECategorySwitchMapping(
