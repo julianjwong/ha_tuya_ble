@@ -7,8 +7,8 @@ from typing import Any
 
 from homeassistant.components.lock import (
     LockEntity,
-    LockEntityDescription,
     LockEntityFeature,
+    LockEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -28,27 +28,14 @@ from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-# Product IDs known to report a transient/incorrect LOCK_MOTOR_STATE
-# value mid-travel during a lock/unlock cycle. Only these product IDs
-# get the settle-window debounce below; every other lock keeps the
-# original immediate-trust behavior so this change can't regress
-# other users' locks.
+# Product IDs known to briefly report an incorrect LOCK_MOTOR_STATE
+# value mid-travel during a lock/unlock cycle. Only these get the
+# settle-window debounce below; every other lock is completely
+# unaffected and behaves exactly as in the upstream implementation.
 _DEBOUNCED_PRODUCT_IDS = {"zyvo0vlb"}
 
-# How long a reported motor-state value must stay unchanged before we
-# trust it as the settled result of a command, instead of a
-# mid-travel bolt/latch position glitch. Only applies to product IDs
-# in _DEBOUNCED_PRODUCT_IDS.
 _SETTLE_WINDOW = 0.6
-
-# How long we wait for the lock to reach the requested state before
-# giving up on a pending lock/unlock command. Only applies to product
-# IDs in _DEBOUNCED_PRODUCT_IDS.
 _COMMAND_TIMEOUT = 8.0
-
-# After a confirmed unlock, briefly ignore a single contradictory
-# "locked" report so the UI doesn't flicker while the bolt finishes
-# travelling. Only applies to product IDs in _DEBOUNCED_PRODUCT_IDS.
 _POST_UNLOCK_DISPLAY_HOLD = 10.0
 
 
@@ -57,7 +44,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Tuya BLE locks."""
+    """Set up the Tuya BLE sensors."""
     data: TuyaBLEData = hass.data[DOMAIN][entry.entry_id]
     product = get_device_product_info(data.device)
     if product and product.lock:
@@ -65,8 +52,6 @@ async def async_setup_entry(
 
 
 class TuyaBLELock(TuyaBLEEntity, LockEntity):
-    """Representation of a Tuya BLE lock."""
-
     platform = Platform.LOCK
 
     def __init__(
@@ -87,79 +72,49 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
         self._debounce_enabled = device.product_id in _DEBOUNCED_PRODUCT_IDS
 
-        # Confirmed physical state, derived from a settled motor-state
-        # report when debouncing is enabled. Only used by the
-        # debounced path below.
+        # Only used when _debounce_enabled is True. Every other lock
+        # ignores these entirely and behaves exactly like upstream.
         self._last_confirmed_locked: bool | None = None
-
-        # Recent raw motor-state readings, used to detect a settled
-        # value instead of trusting the very first report after a
-        # command. Only used when debouncing is enabled.
         self._dp47_history: list[tuple[float, bool]] = []
-
-        # Bookkeeping for whichever lock/unlock/open command is
-        # currently in flight. Only used when debouncing is enabled.
         self._pending_target_locked: bool | None = None
         self._pending_command_label: str | None = None
         self._command_started: float | None = None
         self._command_timeout_unsub = None
-
-        # Timestamp until which a contradictory "locked" report should
-        # be ignored for display purposes. Only used when debouncing
-        # is enabled.
         self._display_hold_until: float = 0.0
 
     @property
     def is_locked(self) -> bool | None:
         """Return true if lock is locked."""
-        dp_id = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
-        if dp_id is None:
+        motor_state = self._device.datapoints.get_or_create(
+            DPCode.LOCK_MOTOR_STATE, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if not motor_state:
             return None
 
         if not self._debounce_enabled:
-            # Original behavior, unchanged for every other lock.
-            motor_state = self._device.datapoints.get_or_create(
-                dp_id, TuyaBLEDataPointType.DT_BOOL, False
-            )
-            if motor_state is None:
-                return None
-            return not bool(motor_state.value)
+            # Unmodified upstream behavior.
+            return not motor_state.value
 
         if self._last_confirmed_locked is not None:
             return self._last_confirmed_locked
 
-        # No settled reading yet (e.g. right after startup) - fall
-        # back to whatever the device currently reports.
-        motor_state = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if motor_state is None:
-            return None
-
-        return not bool(motor_state.value)
+        # No settled reading yet - fall back to raw value, same as
+        # upstream, until the first settled update arrives.
+        return not motor_state.value
 
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if self._debounce_enabled:
-            updates = self.coordinator.last_updates or []
-            dp_id = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
-
-            if dp_id is not None:
-                for update in updates:
-                    if update.id == dp_id:
-                        self._process_motor_state_update(bool(update.value))
+            for update in self.coordinator.last_updates or []:
+                if update.id == DPCode.LOCK_MOTOR_STATE:
+                    self._process_motor_state_update(bool(update.value))
 
         super()._handle_coordinator_update()
 
     def _process_motor_state_update(self, raw_value: bool) -> None:
-        """Debounce a raw motor-state report and reconcile it with any
-        pending lock/unlock/open command.
-
-        Only called for product IDs in _DEBOUNCED_PRODUCT_IDS.
-        `raw_value` is the raw LOCK_MOTOR_STATE boolean as reported by
-        the device. Locked == not raw_value, matching the existing
-        `is_locked` convention in this integration.
+        """Debounce a raw motor-state report for debounce-enabled
+        products only. Locked == not raw_value, matching is_locked.
         """
         now = time.monotonic()
         locked = not raw_value
@@ -171,16 +126,13 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         settled = len({v for _, v in self._dp47_history}) == 1
 
         _LOGGER.debug(
-            "%s (%s) motor-state update raw=%s locked=%s settled=%s pending=%s elapsed=%s",
+            "%s (%s) motor-state update raw=%s locked=%s settled=%s pending=%s",
             self._device.address,
             self._device.product_id,
             raw_value,
             locked,
             settled,
             self._pending_command_label,
-            None
-            if self._command_started is None
-            else round(now - self._command_started, 3),
         )
 
         if self._pending_target_locked is not None:
@@ -248,45 +200,24 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
-        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is None:
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, True
-        )
-        if manual_lock is None:
-            return
-
-        self._arm_pending_command(target_locked=True, label="lock")
-        await manual_lock.set_value(True)
+        if manual_lock := self._device.datapoints.get_or_create(
+            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, True
+        ):
+            self._arm_pending_command(target_locked=True, label="lock")
+            await manual_lock.set_value(True)
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
-        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is None:
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if manual_lock is None:
-            return
-
-        self._arm_pending_command(target_locked=False, label="unlock")
-        await manual_lock.set_value(False)
+        if manual_lock := self._device.datapoints.get_or_create(
+            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, False
+        ):
+            self._arm_pending_command(target_locked=False, label="unlock")
+            await manual_lock.set_value(False)
 
     async def async_open(self, **kwargs: Any) -> None:
-        """Open the lock."""
-        dp_id = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dp_id is None:
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dp_id, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if manual_lock is None:
-            return
-
-        self._arm_pending_command(target_locked=False, label="open")
-        await manual_lock.set_value(False)
+        """Open the covering."""
+        if manual_lock := self._device.datapoints.get_or_create(
+            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, False
+        ):
+            self._arm_pending_command(target_locked=False, label="open")
+            await manual_lock.set_value(False)
