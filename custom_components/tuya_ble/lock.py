@@ -28,16 +28,23 @@ from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
+# Product IDs known to briefly report an incorrect LOCK_MOTOR_STATE
+# value mid-travel during a lock/unlock cycle, and/or that require a
+# validated raw DP71 payload to actually unlock (a DP46 MANUAL_LOCK=False
+# write is a no-op on the motor for these models). Only these get the
+# debounce/raw-unlock handling below; every other lock is unaffected
+# and behaves exactly as in the upstream implementation.
 _DEBOUNCED_PRODUCT_IDS = {"zyvo0vlb"}
 
 _RAW_UNLOCK_DP71_PAYLOAD = {
     "zyvo0vlb": bytes.fromhex("a4a4a4a43439333236323630016a4784cf000000"),
 }
 
-# Real-world BLE reconnects on this network regularly take 40-70s+
-# (multiple connection-attempt backoffs observed in debug logs), so
-# the old 8s/10s windows were far too short and let stale, replayed
-# datapoint state overwrite a correct unlocked reading.
+# Real-world BLE reconnects on busy proxy networks can take 40-70s+
+# (multiple connection-attempt backoffs are normal), so both the
+# command timeout and the post-unlock display hold need to be long
+# enough to outlast a full reconnect cycle rather than the device's
+# nominal response time.
 _SETTLE_WINDOW = 0.6
 _MIN_SETTLE_SAMPLES = 2
 _COMMAND_TIMEOUT = 90.0
@@ -78,6 +85,8 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._debounce_enabled = device.product_id in _DEBOUNCED_PRODUCT_IDS
         self._raw_unlock_payload = _RAW_UNLOCK_DP71_PAYLOAD.get(device.product_id)
 
+        # Only used when _debounce_enabled is True. Every other lock
+        # ignores these entirely and behaves exactly like upstream.
         self._last_confirmed_locked: bool | None = None
         self._dp47_history: list[tuple[float, bool]] = []
         self._pending_target_locked: bool | None = None
@@ -100,18 +109,22 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             return None
 
         if not self._debounce_enabled:
+            # Unmodified upstream behavior.
             return not motor_state.value
 
-        # While a command is in flight, report the optimistic target via
-        # is_locking/is_unlocking instead of falling back to a stale
-        # confirmed value - this stops the slider reverting to "Locked"
-        # when you navigate away mid-command.
+        # While a command is in flight, keep reporting the last
+        # confirmed state (surfaced alongside is_locking/is_unlocking
+        # below) rather than falling back to a possibly-stale raw
+        # value - this stops the slider flipping to "Locked" if you
+        # navigate away mid-command.
         if self._pending_target_locked is not None:
             return self._last_confirmed_locked
 
         if self._last_confirmed_locked is not None:
             return self._last_confirmed_locked
 
+        # No settled reading yet - fall back to raw value, same as
+        # upstream, until the first settled update arrives.
         return not motor_state.value
 
     @property
@@ -148,30 +161,55 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._dp47_history = [
             (t, v) for t, v in self._dp47_history if now - t <= _SETTLE_WINDOW
         ]
-        # Require multiple agreeing samples before treating a reading as
-        # settled - a lone report (e.g. replayed cached state during a
-        # BLE reconnect handshake) is no longer enough on its own.
+
+        # When a command is pending, a single reading that matches the
+        # expected target is trustworthy on its own - it's a direct
+        # response to our own command, not an unsolicited idle report,
+        # so it doesn't need multi-sample corroboration.
+        if self._pending_target_locked is not None:
+            if locked == self._pending_target_locked:
+                _LOGGER.debug(
+                    "%s (%s) motor-state update raw=%s locked=%s "
+                    "matches pending target - completing %s",
+                    self._device.address,
+                    self._device.product_id,
+                    raw_value,
+                    locked,
+                    self._pending_command_label,
+                )
+                self._complete_pending_command()
+                self._set_confirmed_state(locked)
+            else:
+                _LOGGER.debug(
+                    "%s (%s) motor-state update raw=%s locked=%s "
+                    "does not yet match pending target=%s, waiting",
+                    self._device.address,
+                    self._device.product_id,
+                    raw_value,
+                    locked,
+                    self._pending_target_locked,
+                )
+            return
+
+        # No command pending - this is an unsolicited/idle report (e.g.
+        # auto-lock, manual fingerprint unlock, or a stray replayed
+        # packet from a BLE reconnect handshake). Require multiple
+        # agreeing samples before trusting it, since these aren't
+        # confirmations of something we just asked for.
         settled = (
             len(self._dp47_history) >= _MIN_SETTLE_SAMPLES
             and len({v for _, v in self._dp47_history}) == 1
         )
 
         _LOGGER.debug(
-            "%s (%s) motor-state update raw=%s locked=%s settled=%s pending=%s samples=%d",
+            "%s (%s) idle motor-state update raw=%s locked=%s settled=%s samples=%d",
             self._device.address,
             self._device.product_id,
             raw_value,
             locked,
             settled,
-            self._pending_command_label,
             len(self._dp47_history),
         )
-
-        if self._pending_target_locked is not None:
-            if settled and locked == self._pending_target_locked:
-                self._complete_pending_command()
-                self._set_confirmed_state(locked)
-            return
 
         if locked is True and now < self._display_hold_until:
             _LOGGER.debug(
@@ -235,6 +273,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._command_started = None
 
     async def _send_raw_unlock(self) -> bool:
+        """Send the validated raw DP71 unlock payload, if this product needs it."""
         if not self._raw_unlock_payload:
             return False
 
@@ -265,6 +304,8 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         if await self._send_raw_unlock():
             return
 
+        # Fallback for products without a known raw-unlock payload -
+        # matches original upstream behavior.
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
         if dpid is None:
             self._complete_pending_command()
