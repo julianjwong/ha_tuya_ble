@@ -36,9 +36,10 @@ _RAW_UNLOCK_DP71_PAYLOAD = {
     "zyvo0vlb": bytes.fromhex("a4a4a4a43439333236323630016a4784cf000000"),
 }
 
-# Timing tuned for noisy BLE proxy/reconnect environments.
-_COMMAND_TIMEOUT = 120.0
-_STABLE_DWELL = 2.5
+# Timing tuned for this device's observed BLE behaviour: reconnects alone
+# have taken over a minute before the command was even sent, and motor-state
+# reports (dpid47) bounce during the unlock cycle instead of holding steady.
+_COMMAND_TIMEOUT = 180.0
 _POST_UNLOCK_DISPLAY_HOLD = 120.0
 
 
@@ -79,16 +80,15 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._special_handling = device.product_id in _SPECIAL_PRODUCT_IDS
         self._raw_unlock_payload = _RAW_UNLOCK_DP71_PAYLOAD.get(device.product_id)
 
+        # None = unknown/unavailable. True/False = confirmed state.
         self._last_confirmed_locked: bool | None = None
         self._display_hold_until: float = 0.0
 
         self._pending_target_locked: bool | None = None
         self._pending_command_label: str | None = None
         self._command_started: float | None = None
+        self._command_timed_out: bool = False
         self._command_timeout_unsub = None
-
-        self._candidate_state: bool | None = None
-        self._candidate_since: float | None = None
 
     @property
     def is_locked(self) -> bool | None:
@@ -97,26 +97,33 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         if dpid is None:
             return self._last_confirmed_locked
 
-        motor_state = self._device.datapoints.get_or_create(
-            dpid, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if not motor_state:
-            return self._last_confirmed_locked
-
-        raw_locked = not motor_state.value
-
         if not self._special_handling:
-            return raw_locked
+            motor_state = self._device.datapoints.get_or_create(
+                dpid, TuyaBLEDataPointType.DT_BOOL, False
+            )
+            if not motor_state:
+                return None
+            return not motor_state.value
+
+        # A timed-out command leaves the state unknown rather than trusting
+        # a possibly stale/contradictory raw report.
+        if self._command_timed_out:
+            return None
 
         if self._pending_target_locked is not None:
-            if self._last_confirmed_locked is not None:
-                return self._last_confirmed_locked
-            return raw_locked
-
-        if self._last_confirmed_locked is not None:
+            # Still mid-command: report the last confirmed state if we have
+            # one, otherwise unknown (never guess from a noisy raw report).
             return self._last_confirmed_locked
 
-        return raw_locked
+        return self._last_confirmed_locked
+
+    @property
+    def available(self) -> bool:
+        """Return False while state is unknown after a timed-out command."""
+        base_available = super().available
+        if self._special_handling and self._command_timed_out:
+            return False
+        return base_available
 
     @property
     def is_unlocking(self) -> bool | None:
@@ -146,8 +153,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
     def _set_confirmed_state(self, locked: bool) -> None:
         """Persist a confirmed lock state."""
         self._last_confirmed_locked = locked
-        self._candidate_state = None
-        self._candidate_since = None
+        self._command_timed_out = False
 
         if not locked:
             self._display_hold_until = time.monotonic() + _POST_UNLOCK_DISPLAY_HOLD
@@ -156,56 +162,38 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
         self.async_write_ha_state()
 
-    def _start_candidate(self, locked: bool) -> None:
-        """Start or refresh a candidate state awaiting dwell confirmation."""
-        now = time.monotonic()
-        if self._candidate_state != locked:
-            self._candidate_state = locked
-            self._candidate_since = now
-
-    def _candidate_matured(self) -> bool:
-        """Return True if the current candidate state has dwelled long enough."""
-        if self._candidate_since is None:
-            return False
-        return (time.monotonic() - self._candidate_since) >= _STABLE_DWELL
-
     def _process_motor_state_update(self, raw_value: bool) -> None:
         """Process motor state reports for noisy lock models."""
         now = time.monotonic()
         locked = not raw_value
 
         _LOGGER.debug(
-            "%s (%s) motor-state update raw%s locked%s pending%s candidate%s",
+            "%s (%s) motor-state update raw=%s locked=%s pending=%s",
             self._device.address,
             self._device.product_id,
             raw_value,
             locked,
             self._pending_command_label,
-            self._candidate_state,
         )
 
-        # While pending, only accept success after a stable dwell at target.
         if self._pending_target_locked is not None:
+            # This device's motor-state reports bounce during travel, so the
+            # first report matching the target is treated as confirmation
+            # rather than waiting for a stable dwell that never arrives.
             if locked == self._pending_target_locked:
-                self._start_candidate(locked)
-                if self._candidate_matured():
-                    _LOGGER.debug(
-                        "%s (%s) %s reached stable target locked=%s",
-                        self._device.address,
-                        self._device.product_id,
-                        self._pending_command_label,
-                        locked,
-                    )
-                    self._set_confirmed_state(locked)
-                    self._complete_pending_command()
-            else:
-                # Opposite report resets the dwell timer but does not fail the command.
-                self._candidate_state = None
-                self._candidate_since = None
+                _LOGGER.debug(
+                    "%s (%s) %s confirmed locked=%s",
+                    self._device.address,
+                    self._device.product_id,
+                    self._pending_command_label,
+                    locked,
+                )
+                self._set_confirmed_state(locked)
+                self._complete_pending_command()
             return
 
-        # No pending command: require dwell before changing confirmed state.
-        # During post-unlock hold, ignore contradictory relock blips.
+        # No pending command: ignore contradictory "locked" blips during the
+        # post-unlock display hold to avoid flicker back to Locked.
         if locked and now < self._display_hold_until:
             _LOGGER.debug(
                 "%s (%s) ignoring contradictory locked report during post-unlock hold",
@@ -214,32 +202,26 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             )
             return
 
-        self._start_candidate(locked)
-        if self._candidate_matured():
-            self._set_confirmed_state(locked)
+        self._set_confirmed_state(locked)
 
-    def _arm_pending_command(self, target_locked: bool, label: str) -> bool:
-        """Arm a pending command; return False if an identical command is already pending."""
+    def _arm_pending_command(self, target_locked: bool, label: str) -> None:
+        """Arm a pending command, overriding any stuck pending command."""
         if not self._special_handling:
-            return True
+            return
 
-        if (
-            self._pending_target_locked == target_locked
-            and self._pending_command_label == label
-        ):
+        if self._pending_target_locked is not None:
             _LOGGER.debug(
-                "%s (%s) ignoring duplicate in-flight %s request",
+                "%s (%s) overriding stuck pending %s with new %s request",
                 self._device.address,
                 self._device.product_id,
+                self._pending_command_label,
                 label,
             )
-            return False
 
         self._pending_target_locked = target_locked
         self._pending_command_label = label
         self._command_started = time.monotonic()
-        self._candidate_state = None
-        self._candidate_since = None
+        self._command_timed_out = False
 
         if self._command_timeout_unsub is not None:
             self._command_timeout_unsub()
@@ -248,7 +230,6 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             self.hass, _COMMAND_TIMEOUT, self._handle_command_timeout
         )
         self.async_write_ha_state()
-        return True
 
     @callback
     def _handle_command_timeout(self, _now: Any = None) -> None:
@@ -257,12 +238,14 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             return
 
         _LOGGER.warning(
-            "%s (%s) timed out waiting for %s to complete after %.0fs",
+            "%s (%s) timed out waiting for %s to complete after %.0fs; "
+            "reporting state as unknown rather than trusting a stale reading",
             self._device.address,
             self._device.product_id,
             self._pending_command_label,
             _COMMAND_TIMEOUT,
         )
+        self._command_timed_out = True
         self._complete_pending_command()
         self.async_write_ha_state()
 
@@ -275,8 +258,6 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._pending_target_locked = None
         self._pending_command_label = None
         self._command_started = None
-        self._candidate_state = None
-        self._candidate_since = None
 
     async def _send_raw_unlock(self) -> bool:
         """Send validated raw DP71 unlock payload if available."""
@@ -294,8 +275,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
-        if self._special_handling and not self._arm_pending_command(True, "lock"):
-            return
+        self._arm_pending_command(True, "lock")
 
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
         if dpid is None:
@@ -309,14 +289,28 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             self._complete_pending_command()
             return
 
-        await manual_lock.set_value(True)
+        try:
+            await manual_lock.set_value(True)
+        except Exception:
+            _LOGGER.warning(
+                "%s (%s) lock write failed; leaving command pending for retry/timeout",
+                self._device.address,
+                self._device.product_id,
+            )
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
-        if self._special_handling and not self._arm_pending_command(False, "unlock"):
-            return
+        self._arm_pending_command(False, "unlock")
 
-        if await self._send_raw_unlock():
+        try:
+            if await self._send_raw_unlock():
+                return
+        except Exception:
+            _LOGGER.warning(
+                "%s (%s) raw unlock write failed; leaving command pending for retry/timeout",
+                self._device.address,
+                self._device.product_id,
+            )
             return
 
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
@@ -331,7 +325,14 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             self._complete_pending_command()
             return
 
-        await manual_lock.set_value(False)
+        try:
+            await manual_lock.set_value(False)
+        except Exception:
+            _LOGGER.warning(
+                "%s (%s) unlock write failed; leaving command pending for retry/timeout",
+                self._device.address,
+                self._device.product_id,
+            )
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the lock."""
