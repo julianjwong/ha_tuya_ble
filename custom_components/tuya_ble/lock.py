@@ -28,10 +28,6 @@ from .tuya_ble import TuyaBLEDataPointType, TuyaBLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-# Product IDs known to briefly report an incorrect LOCK_MOTOR_STATE
-# value mid-travel during a lock/unlock cycle. Only these get the
-# settle-window debounce below; every other lock is completely
-# unaffected and behaves exactly as in the upstream implementation.
 _DEBOUNCED_PRODUCT_IDS = {"zyvo0vlb"}
 
 _SETTLE_WINDOW = 0.6
@@ -72,8 +68,6 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
         self._debounce_enabled = device.product_id in _DEBOUNCED_PRODUCT_IDS
 
-        # Only used when _debounce_enabled is True. Every other lock
-        # ignores these entirely and behaves exactly like upstream.
         self._last_confirmed_locked: bool | None = None
         self._dp47_history: list[tuple[float, bool]] = []
         self._pending_target_locked: bool | None = None
@@ -85,8 +79,12 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
     @property
     def is_locked(self) -> bool | None:
         """Return true if lock is locked."""
+        dpid = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
+        if dpid is None:
+            return None
+
         motor_state = self._device.datapoints.get_or_create(
-            DPCode.LOCK_MOTOR_STATE, TuyaBLEDataPointType.DT_BOOL, False
+            dpid, TuyaBLEDataPointType.DT_BOOL, False
         )
         if not motor_state:
             return None
@@ -106,8 +104,9 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
         if self._debounce_enabled:
+            motor_dpid = self.find_dpid(DPCode.LOCK_MOTOR_STATE)
             for update in self.coordinator.last_updates or []:
-                if update.id == DPCode.LOCK_MOTOR_STATE:
+                if motor_dpid is not None and update.id == motor_dpid:
                     self._process_motor_state_update(bool(update.value))
 
         super()._handle_coordinator_update()
@@ -200,24 +199,33 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
+        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dpid is None:
+            return
         if manual_lock := self._device.datapoints.get_or_create(
-            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, True
+            dpid, TuyaBLEDataPointType.DT_BOOL, True
         ):
             self._arm_pending_command(target_locked=True, label="lock")
             await manual_lock.set_value(True)
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
+        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dpid is None:
+            return
         if manual_lock := self._device.datapoints.get_or_create(
-            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, False
+            dpid, TuyaBLEDataPointType.DT_BOOL, False
         ):
             self._arm_pending_command(target_locked=False, label="unlock")
             await manual_lock.set_value(False)
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the covering."""
+        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dpid is None:
+            return
         if manual_lock := self._device.datapoints.get_or_create(
-            DPCode.MANUAL_LOCK, TuyaBLEDataPointType.DT_BOOL, False
+            dpid, TuyaBLEDataPointType.DT_BOOL, False
         ):
             self._arm_pending_command(target_locked=False, label="open")
             await manual_lock.set_value(False)
