@@ -30,6 +30,14 @@ _LOGGER = logging.getLogger(__name__)
 
 _DEBOUNCED_PRODUCT_IDS = {"zyvo0vlb"}
 
+# zyvo0vlb does NOT support unlock via a DP46 boolean toggle - DP46=False
+# is a no-op on the motor (confirmed via debug logs: command completes,
+# but motor-state stays locked). Unlock requires the same validated raw
+# DP71 payload used by the previously-working unlock button.
+_RAW_UNLOCK_DP71_PAYLOAD = {
+    "zyvo0vlb": bytes.fromhex("a4a4a4a43439333236323630016a4784cf000000"),
+}
+
 _SETTLE_WINDOW = 0.6
 _COMMAND_TIMEOUT = 8.0
 _POST_UNLOCK_DISPLAY_HOLD = 10.0
@@ -67,6 +75,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._attr_supported_features = LockEntityFeature.OPEN
 
         self._debounce_enabled = device.product_id in _DEBOUNCED_PRODUCT_IDS
+        self._raw_unlock_payload = _RAW_UNLOCK_DP71_PAYLOAD.get(device.product_id)
 
         self._last_confirmed_locked: bool | None = None
         self._dp47_history: list[tuple[float, bool]] = []
@@ -90,14 +99,11 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             return None
 
         if not self._debounce_enabled:
-            # Unmodified upstream behavior.
             return not motor_state.value
 
         if self._last_confirmed_locked is not None:
             return self._last_confirmed_locked
 
-        # No settled reading yet - fall back to raw value, same as
-        # upstream, until the first settled update arrives.
         return not motor_state.value
 
     @callback
@@ -112,9 +118,6 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         super()._handle_coordinator_update()
 
     def _process_motor_state_update(self, raw_value: bool) -> None:
-        """Debounce a raw motor-state report for debounce-enabled
-        products only. Locked == not raw_value, matching is_locked.
-        """
         now = time.monotonic()
         locked = not raw_value
 
@@ -197,6 +200,20 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._pending_command_label = None
         self._command_started = None
 
+    async def _send_raw_unlock(self) -> bool:
+        """Send the validated raw DP71 unlock payload, if this product needs it."""
+        if not self._raw_unlock_payload:
+            return False
+
+        dp71 = self._device.datapoints.get_or_create(
+            71, TuyaBLEDataPointType.DT_RAW, b""
+        )
+        if not dp71:
+            return False
+
+        await dp71.set_value(self._raw_unlock_payload)
+        return True
+
     async def async_lock(self, **kwargs: Any) -> None:
         """Lock the lock."""
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
@@ -210,22 +227,38 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     async def async_unlock(self, **kwargs: Any) -> None:
         """Unlock the lock."""
+        self._arm_pending_command(target_locked=False, label="unlock")
+
+        if await self._send_raw_unlock():
+            return
+
+        # Fallback for products without a known raw-unlock payload -
+        # matches original upstream behavior.
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
         if dpid is None:
+            self._complete_pending_command()
             return
         if manual_lock := self._device.datapoints.get_or_create(
             dpid, TuyaBLEDataPointType.DT_BOOL, False
         ):
-            self._arm_pending_command(target_locked=False, label="unlock")
             await manual_lock.set_value(False)
+        else:
+            self._complete_pending_command()
 
     async def async_open(self, **kwargs: Any) -> None:
         """Open the covering."""
+        self._arm_pending_command(target_locked=False, label="open")
+
+        if await self._send_raw_unlock():
+            return
+
         dpid = self.find_dpid(DPCode.MANUAL_LOCK)
         if dpid is None:
+            self._complete_pending_command()
             return
         if manual_lock := self._device.datapoints.get_or_create(
             dpid, TuyaBLEDataPointType.DT_BOOL, False
         ):
-            self._arm_pending_command(target_locked=False, label="open")
             await manual_lock.set_value(False)
+        else:
+            self._complete_pending_command()
