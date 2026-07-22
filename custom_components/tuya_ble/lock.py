@@ -42,6 +42,12 @@ _RAW_UNLOCK_DP71_PAYLOAD = {
 _COMMAND_TIMEOUT = 180.0
 _POST_UNLOCK_DISPLAY_HOLD = 120.0
 
+# Background retry backoff after a command times out and the lock goes
+# unavailable. Doubles each attempt up to the cap, so a weak/dead BLE link
+# isn't hammered with reconnect attempts.
+_RETRY_INITIAL_DELAY = 60.0
+_RETRY_MAX_DELAY = 600.0
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -89,6 +95,12 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._command_started: float | None = None
         self._command_timed_out: bool = False
         self._command_timeout_unsub = None
+
+        # Background retry state for when a command times out.
+        self._retry_target_locked: bool | None = None
+        self._retry_label: str | None = None
+        self._retry_delay: float = _RETRY_INITIAL_DELAY
+        self._retry_unsub = None
 
     @property
     def is_locked(self) -> bool | None:
@@ -139,6 +151,14 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
             return None
         return self._pending_target_locked is True
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel any pending timers when the entity is removed."""
+        self._cancel_retry()
+        if self._command_timeout_unsub is not None:
+            self._command_timeout_unsub()
+            self._command_timeout_unsub = None
+        await super().async_will_remove_from_hass()
+
     @callback
     def _handle_coordinator_update(self) -> None:
         """Handle updated data from the coordinator."""
@@ -154,6 +174,7 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         """Persist a confirmed lock state."""
         self._last_confirmed_locked = locked
         self._command_timed_out = False
+        self._cancel_retry()
 
         if not locked:
             self._display_hold_until = time.monotonic() + _POST_UNLOCK_DISPLAY_HOLD
@@ -192,6 +213,13 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
                 self._complete_pending_command()
             return
 
+        # Any report at all — including one that arrives from a background
+        # retry, a manual command, or a physical key/thumb-turn — clears a
+        # previously timed-out command.
+        if self._command_timed_out:
+            self._set_confirmed_state(locked)
+            return
+
         # No pending command: ignore contradictory "locked" blips during the
         # post-unlock display hold to avoid flicker back to Locked.
         if locked and now < self._display_hold_until:
@@ -208,6 +236,10 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         """Arm a pending command, overriding any stuck pending command."""
         if not self._special_handling:
             return
+
+        # A fresh user-initiated command always takes priority over any
+        # background auto-retry in progress.
+        self._cancel_retry()
 
         if self._pending_target_locked is not None:
             _LOGGER.debug(
@@ -233,21 +265,25 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
 
     @callback
     def _handle_command_timeout(self, _now: Any = None) -> None:
-        """Handle command timeout."""
+        """Handle command timeout by marking unavailable and scheduling a retry."""
         if self._pending_target_locked is None:
             return
 
         _LOGGER.warning(
             "%s (%s) timed out waiting for %s to complete after %.0fs; "
-            "reporting state as unknown rather than trusting a stale reading",
+            "reporting state as unknown and scheduling automatic retries",
             self._device.address,
             self._device.product_id,
             self._pending_command_label,
             _COMMAND_TIMEOUT,
         )
         self._command_timed_out = True
+        target = self._pending_target_locked
+        label = self._pending_command_label
         self._complete_pending_command()
         self.async_write_ha_state()
+
+        self._schedule_retry(target, label, reset_backoff=True)
 
     def _complete_pending_command(self) -> None:
         """Clear pending command state."""
@@ -258,6 +294,123 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._pending_target_locked = None
         self._pending_command_label = None
         self._command_started = None
+
+    def _schedule_retry(
+        self, target_locked: bool, label: str, reset_backoff: bool = False
+    ) -> None:
+        """Schedule a background retry of the last failed command."""
+        self._retry_target_locked = target_locked
+        self._retry_label = label
+
+        if reset_backoff:
+            self._retry_delay = _RETRY_INITIAL_DELAY
+
+        if self._retry_unsub is not None:
+            self._retry_unsub()
+
+        _LOGGER.debug(
+            "%s (%s) scheduling automatic retry of %s in %.0fs",
+            self._device.address,
+            self._device.product_id,
+            label,
+            self._retry_delay,
+        )
+
+        self._retry_unsub = async_call_later(
+            self.hass, self._retry_delay, self._handle_retry
+        )
+
+    def _cancel_retry(self) -> None:
+        """Cancel any scheduled background retry."""
+        if self._retry_unsub is not None:
+            self._retry_unsub()
+            self._retry_unsub = None
+        self._retry_target_locked = None
+        self._retry_label = None
+        self._retry_delay = _RETRY_INITIAL_DELAY
+
+    @callback
+    def _handle_retry(self, _now: Any = None) -> None:
+        """Fire a background retry attempt."""
+        target = self._retry_target_locked
+        label = self._retry_label
+        if target is None or label is None:
+            return
+
+        _LOGGER.info(
+            "%s (%s) automatically retrying %s after prior timeout",
+            self._device.address,
+            self._device.product_id,
+            label,
+        )
+
+        self.hass.async_create_task(self._async_retry_command(target, label))
+
+    async def _async_retry_command(self, target_locked: bool, label: str) -> None:
+        """Re-issue the last failed command as a background retry."""
+        self._pending_target_locked = target_locked
+        self._pending_command_label = label
+        self._command_started = time.monotonic()
+
+        if self._command_timeout_unsub is not None:
+            self._command_timeout_unsub()
+        self._command_timeout_unsub = async_call_later(
+            self.hass, _COMMAND_TIMEOUT, self._handle_command_timeout
+        )
+
+        try:
+            if target_locked:
+                await self._async_send_lock()
+            else:
+                await self._async_send_unlock()
+        except Exception:
+            _LOGGER.warning(
+                "%s (%s) retry attempt for %s failed to send; will back off and retry again",
+                self._device.address,
+                self._device.product_id,
+                label,
+            )
+            self._complete_pending_command()
+            self._command_timed_out = True
+            self.async_write_ha_state()
+            # Back off further (up to the cap) before trying again.
+            self._retry_delay = min(self._retry_delay * 2, _RETRY_MAX_DELAY)
+            self._schedule_retry(target_locked, label)
+
+    async def _async_send_lock(self) -> None:
+        """Send the lock command."""
+        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dpid is None:
+            self._complete_pending_command()
+            return
+
+        manual_lock = self._device.datapoints.get_or_create(
+            dpid, TuyaBLEDataPointType.DT_BOOL, True
+        )
+        if not manual_lock:
+            self._complete_pending_command()
+            return
+
+        await manual_lock.set_value(True)
+
+    async def _async_send_unlock(self) -> None:
+        """Send the unlock command, preferring the validated raw DP71 path."""
+        if await self._send_raw_unlock():
+            return
+
+        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
+        if dpid is None:
+            self._complete_pending_command()
+            return
+
+        manual_lock = self._device.datapoints.get_or_create(
+            dpid, TuyaBLEDataPointType.DT_BOOL, False
+        )
+        if not manual_lock:
+            self._complete_pending_command()
+            return
+
+        await manual_lock.set_value(False)
 
     async def _send_raw_unlock(self) -> bool:
         """Send validated raw DP71 unlock payload if available."""
@@ -277,23 +430,11 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         """Lock the lock."""
         self._arm_pending_command(True, "lock")
 
-        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dpid is None:
-            self._complete_pending_command()
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dpid, TuyaBLEDataPointType.DT_BOOL, True
-        )
-        if not manual_lock:
-            self._complete_pending_command()
-            return
-
         try:
-            await manual_lock.set_value(True)
+            await self._async_send_lock()
         except Exception:
             _LOGGER.warning(
-                "%s (%s) lock write failed; leaving command pending for retry/timeout",
+                "%s (%s) lock write failed; leaving command pending for timeout/retry",
                 self._device.address,
                 self._device.product_id,
             )
@@ -303,33 +444,10 @@ class TuyaBLELock(TuyaBLEEntity, LockEntity):
         self._arm_pending_command(False, "unlock")
 
         try:
-            if await self._send_raw_unlock():
-                return
+            await self._async_send_unlock()
         except Exception:
             _LOGGER.warning(
-                "%s (%s) raw unlock write failed; leaving command pending for retry/timeout",
-                self._device.address,
-                self._device.product_id,
-            )
-            return
-
-        dpid = self.find_dpid(DPCode.MANUAL_LOCK)
-        if dpid is None:
-            self._complete_pending_command()
-            return
-
-        manual_lock = self._device.datapoints.get_or_create(
-            dpid, TuyaBLEDataPointType.DT_BOOL, False
-        )
-        if not manual_lock:
-            self._complete_pending_command()
-            return
-
-        try:
-            await manual_lock.set_value(False)
-        except Exception:
-            _LOGGER.warning(
-                "%s (%s) unlock write failed; leaving command pending for retry/timeout",
+                "%s (%s) unlock write failed; leaving command pending for timeout/retry",
                 self._device.address,
                 self._device.product_id,
             )
