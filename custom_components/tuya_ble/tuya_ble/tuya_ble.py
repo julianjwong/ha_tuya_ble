@@ -57,6 +57,8 @@ _LOGGER = logging.getLogger(__name__)
 
 BLEAK_EXCEPTIONS = (*BLEAK_RETRY_EXCEPTIONS, OSError)
 
+_CONNECT_RETRY_INITIAL_DELAY = 0.5
+_CONNECT_RETRY_MAX_DELAY = BLEAK_BACKOFF_TIME
 
 # @dataclass
 class TuyaBLEEntityDescription:
@@ -711,6 +713,7 @@ class TuyaBLEDevice:
             if self._client and self._client.is_connected and self._is_paired:
                 return
             attempts_count = 100
+            retry_delay = _CONNECT_RETRY_INITIAL_DELAY
             while attempts_count > 0:
                 attempts_count -= 1
                 if attempts_count == 0:
@@ -740,6 +743,8 @@ class TuyaBLEDevice:
                         self.rssi,
                         exc_info=True,
                     )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
                 except BLEAK_EXCEPTIONS as ex:
                     if "Bluetooth is already shutdown" in str(ex):
@@ -751,6 +756,8 @@ class TuyaBLEDevice:
                     _LOGGER.debug(
                         "%s: communication failed", self.address, exc_info=True
                     )
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
                 except Exception as ex:
                     if "Bluetooth is already shutdown" in str(ex):
@@ -760,6 +767,8 @@ class TuyaBLEDevice:
                         )
                         raise
                     _LOGGER.debug("%s: unexpected error", self.address, exc_info=True)
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
 
                 if client and client.is_connected:
@@ -782,8 +791,12 @@ class TuyaBLEDevice:
                             self.address,
                             exc_info=True,
                         )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                         continue
                 else:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
 
                 if self._client and self._client.is_connected:
@@ -800,6 +813,8 @@ class TuyaBLEDevice:
                                 "%s: Sending device info request failed",
                                 self.address,
                             )
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                             continue
                     except Exception as ex:  # [BLEAK_EXCEPTIONS, BleakNotFoundError]:
                         if "Bluetooth is already shutdown" in str(ex):
@@ -814,8 +829,12 @@ class TuyaBLEDevice:
                             self.address,
                             exc_info=True,
                         )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                         continue
                 else:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
 
                 if self._client and self._client.is_connected:
@@ -832,6 +851,8 @@ class TuyaBLEDevice:
                                 "%s: Sending pairing request failed",
                                 self.address,
                             )
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                             continue
                     except Exception as ex:  # [BLEAK_EXCEPTIONS, BleakNotFoundError]:
                         if "Bluetooth is already shutdown" in str(ex):
@@ -846,8 +867,12 @@ class TuyaBLEDevice:
                             self.address,
                             exc_info=True,
                         )
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                         continue
                 else:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, _CONNECT_RETRY_MAX_DELAY)
                     continue
 
                 break
